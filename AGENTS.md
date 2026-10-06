@@ -8,3 +8,5 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- LinkedIn scraping lives in `src/lib/linkedin/scraper.server.ts` (a port of Shreyaan/linkedin-profile-api), exposed via `src/lib/linkedin.functions.ts`; the cookie header is sent per request from tab sessionStorage and never stored server-side or logged — keeps the app stateless and the secret off disk.

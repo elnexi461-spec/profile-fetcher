@@ -1,3 +1,4 @@
+import type { ProviderId } from "./providers";
 /**
  * TypeScript port of Shreyaan/linkedin-profile-api (app/linkedin/*, app/url_validation.py).
  * Stateless: the cookie header arrives per request, lives only in memory for that
@@ -318,7 +319,39 @@ const BASE_HEADERS: Record<string, string> = {
   "x-restli-protocol-version": "2.0.0",
 };
 
-async function requestJson(url: string, params: Record<string, string>, jar: Record<string, string>, timeoutMs: number) {
+/* ---------------- optional scraping-API relay with automatic fallback to direct session ---------------- */
+export type Relay = { id: ProviderId; key: string; proxy: string | null };
+type Tx = { timeoutMs: number; relay: Relay | null; warnings: string[] };
+
+function relayUrl(r: Relay, target: string) {
+  const u = encodeURIComponent(target);
+  if (r.id === "scrapingbee")
+    return `https://app.scrapingbee.com/api/v1/?api_key=${r.key}&url=${u}&render_js=false&forward_headers_pure=true&transparent_status_code=true${r.proxy ? `&own_proxy=${encodeURIComponent(r.proxy)}` : ""}`;
+  if (r.id === "scraperapi") return `https://api.scraperapi.com/?api_key=${r.key}&url=${u}&keep_headers=true`;
+  return `https://api.zenrows.com/v1/?apikey=${r.key}&url=${u}&custom_headers=true&original_status=true`;
+}
+
+async function send(target: string, headers: Record<string, string>, tx: Tx): Promise<Response> {
+  if (tx.relay) {
+    const r = tx.relay;
+    const h: Record<string, string> = r.id === "scrapingbee"
+      ? Object.fromEntries(Object.entries(headers).map(([k, v]) => [`Spb-${k}`, v]))
+      : headers;
+    try {
+      const res = await fetch(relayUrl(r, target), { headers: h, signal: AbortSignal.timeout(Math.max(tx.timeoutMs, 30000)) });
+      // Provider-level failures (quota exhausted, bad key, concurrency, provider error) → fall back.
+      const providerFail = [401, 402, 403, 429, 500, 502, 503].includes(res.status) && !(res.headers.get("content-type") ?? "").includes("linkedin");
+      if (!providerFail || res.status === 404) return res;
+      tx.warnings.push(`provider_fallback:${r.id}:http_${res.status}`);
+    } catch {
+      tx.warnings.push(`provider_fallback:${r.id}:network`);
+    }
+    tx.relay = null; // sticky for the rest of this scrape
+  }
+  return fetch(target, { headers, redirect: "manual", signal: AbortSignal.timeout(tx.timeoutMs) });
+}
+
+async function requestJson(url: string, params: Record<string, string>, jar: Record<string, string>, tx: Tx) {
   const qs = new URLSearchParams(params).toString();
   const headers = {
     ...BASE_HEADERS,
@@ -327,7 +360,7 @@ async function requestJson(url: string, params: Record<string, string>, jar: Rec
   };
   let res: Response;
   try {
-    res = await fetch(`${url}?${qs}`, { headers, redirect: "manual", signal: AbortSignal.timeout(timeoutMs) });
+    res = await send(`${url}?${qs}`, headers, tx);
   } catch (e: any) {
     if (e?.name === "TimeoutError" || e?.name === "AbortError")
       throw new ScrapeError("linkedin_timeout", "LinkedIn did not respond in time");
@@ -363,17 +396,17 @@ async function requestJson(url: string, params: Record<string, string>, jar: Rec
 const hasProfile = (doc: Obj) =>
   (doc.included ?? []).some((o: any) => String(o?.$type ?? "").endsWith(T.PROFILE));
 
-async function fetchFullProfile(slug: string, jar: Record<string, string>, timeoutMs: number) {
+async function fetchFullProfile(slug: string, jar: Record<string, string>, tx: Tx) {
   const params = { q: "memberIdentity", memberIdentity: slug, decorationId: FULL_PROFILE_DECORATION };
-  let doc = await requestJson(DASH_PROFILES, params, jar, timeoutMs);
+  let doc = await requestJson(DASH_PROFILES, params, jar, tx);
   if (hasProfile(doc)) return doc;
-  doc = await requestJson(DASH_PROFILES, { ...params, decorationId: TOP_CARD_DECORATION }, jar, timeoutMs);
+  doc = await requestJson(DASH_PROFILES, { ...params, decorationId: TOP_CARD_DECORATION }, jar, tx);
   if (!hasProfile(doc)) throw new ScrapeError("linkedin_schema_changed", "LinkedIn response contained no profile");
   doc._lpa_top_card_fallback = true;
   return doc;
 }
 
-async function enrichSkills(p: ProfilePayload, urn: string | null, jar: Record<string, string>, timeoutMs: number) {
+async function enrichSkills(p: ProfilePayload, urn: string | null, jar: Record<string, string>, tx: Tx) {
   if (!urn || p.data.skills.length < SECTION_PAGE_SIZE) return;
   const seen = new Set(p.data.skills.map((s) => s.name));
   let truncated = true;
@@ -382,7 +415,7 @@ async function enrichSkills(p: ProfilePayload, urn: string | null, jar: Record<s
       SKILLS_URL,
       { q: "viewee", profileUrn: urn, start: String(start), count: String(SECTION_PAGE_SIZE) },
       jar,
-      timeoutMs,
+      tx,
     );
     const fresh = skills(resolveElements(page)).filter((s) => !seen.has(s.name));
     fresh.forEach((s) => seen.add(s.name));
@@ -404,7 +437,8 @@ async function sha16(s: string) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
 }
 
-export async function scrape(opts: { url: string; cookie: string; timeoutMs: number; useCache: boolean }) {
+export async function scrape(opts: { url: string; cookie: string; timeoutMs: number; useCache: boolean; relay?: Relay | null }) {
+  const tx: Tx = { timeoutMs: opts.timeoutMs, relay: opts.relay ?? null, warnings: [] };
   const slug = extractSlug(opts.url);
   const jar = parseCookieHeader(opts.cookie);
   const key = `${await sha16(slug.toLowerCase())}:${await sha16(jar["li_at"]!)}`;
@@ -416,10 +450,12 @@ export async function scrape(opts: { url: string; cookie: string; timeoutMs: num
       return copy;
     }
   }
-  const doc = await fetchFullProfile(slug, jar, opts.timeoutMs);
+  const doc = await fetchFullProfile(slug, jar, tx);
   const n = normalize(doc);
   if (!n) throw new ScrapeError("linkedin_schema_changed", "LinkedIn response contained no profile");
-  await enrichSkills(n.payload, n.profileUrn, jar, opts.timeoutMs);
+  await enrichSkills(n.payload, n.profileUrn, jar, tx);
+  n.payload.meta.source = tx.relay ? tx.relay.id : "session";
+  n.payload.meta.warnings.push(...tx.warnings);
   if (opts.useCache) {
     if (cache.size > 200) cache.clear();
     cache.set(key, { at: Date.now(), payload: structuredClone(n.payload) });

@@ -48,7 +48,7 @@ function Dashboard() {
     setState({ s: "loading" });
     const t = performance.now();
     try {
-      const r = await run({ data: { url, cookie: settings.getCookie(), timeoutSec: prefs.timeoutSec, useCache: prefs.useCache } });
+      const r = await run({ data: { url, cookie: settings.getCookie(), apiKey: settings.getApiKey(), proxy: settings.getProxy(), timeoutSec: prefs.timeoutSec, useCache: prefs.useCache } });
       if (r.ok) setState({ s: "done", p: r.value, ms: performance.now() - t });
       else {
         setState({ s: "error", code: r.code, message: r.message });

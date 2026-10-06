@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import type { ProfilePayload, Result } from "./linkedin/types";
 import { ScrapeError, scrape, testSession } from "./linkedin/scraper.server";
+import { detectProvider, normalizeProxy, stripPrefix } from "./linkedin/providers";
 
 const opts = {
   cookie: z.string().max(20000),
@@ -17,11 +18,14 @@ function fail(e: unknown): Result<never> {
 
 export const scrapeProfile = createServerFn({ method: "POST" })
   .inputValidator((d) =>
-    z.object({ url: z.string().max(2048), useCache: z.boolean().default(true), ...opts }).parse(d),
+    z.object({ url: z.string().max(2048), useCache: z.boolean().default(true), apiKey: z.string().max(500).default(""), proxy: z.string().max(1000).default(""), ...opts }).parse(d),
   )
   .handler(async ({ data }): Promise<Result<ProfilePayload>> => {
     try {
+      const d = detectProvider(data.apiKey);
+      const relay = d?.supported ? { id: d.id, key: encodeURIComponent(stripPrefix(data.apiKey)), proxy: normalizeProxy(data.proxy) } : null;
       const value = await scrape({
+        relay,
         url: data.url,
         cookie: data.cookie,
         timeoutMs: data.timeoutSec * 1000,

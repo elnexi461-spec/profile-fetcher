@@ -35,7 +35,7 @@ const HELP: Partial<Record<ScrapeErrorCode, string>> = {
 };
 
 function Dashboard() {
-  const { hasCookie, prefs, ready } = useSettings();
+  const { hasCookie, apiKey, prefs, ready } = useSettings();
   const [url, setUrl] = useState("");
   const [state, setState] = useState<State>({ s: "idle" });
   const [fmt, setFmt] = useState<"json" | "csv" | null>(null);
@@ -67,10 +67,10 @@ function Dashboard() {
         <p className="hint mt-1">Paste a public LinkedIn profile URL, for example linkedin.com/in/username.</p>
       </div>
 
-      {ready && !hasCookie && (
+      {ready && !hasCookie && !apiKey && (
         <div className="flex items-center gap-3 rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
           <span className="dot bg-warning" />
-          No LinkedIn session configured.
+          No LinkedIn session or scraping API key configured.
           <Link to="/settings" className="ml-auto font-medium text-primary hover:underline">Open Settings</Link>
         </div>
       )}

@@ -4,7 +4,7 @@ import type { ProviderId } from "./providers";
  * Stateless: the cookie header arrives per request, lives only in memory for that
  * call, and is never logged, cached by value, or included in error messages.
  */
-import type { ProfileData, ProfilePayload, ScrapeErrorCode } from "./types";
+import type { ProfileData, ProfilePayload, ScrapeErrorCode, YM } from "./types";
 
 // Voyager JSON is untyped; the public shape is enforced by ProfilePayload.
 type Obj = any;

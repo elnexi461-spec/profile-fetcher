@@ -488,3 +488,68 @@ export async function testSession(cookie: string, timeoutMs: number) {
     throw new ScrapeError("linkedin_rate_limited", "LinkedIn is blocking or rate-limiting this session");
   throw new ScrapeError("linkedin_upstream_error", `LinkedIn returned HTTP ${res.status}`);
 }
+
+/* ---------------- cookie-less mode: public profile page via scraping API ---------------- */
+const unesc = (s: string) => s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+const ym = (s: any): YM => {
+  const m = String(s ?? "").match(/(\d{4})(?:-(\d{2}))?/);
+  return m ? { year: +m[1]!, month: m[2] ? +m[2] : null } : null;
+};
+
+export async function scrapePublic(opts: { url: string; relay: Relay; timeoutMs: number }): Promise<ProfilePayload> {
+  const slug = extractSlug(opts.url);
+  const target = `https://www.linkedin.com/in/${encodeURIComponent(slug)}/`;
+  let res: Response;
+  try {
+    res = await fetch(relayUrl({ ...opts.relay }, target), { signal: AbortSignal.timeout(Math.max(opts.timeoutMs, 60000)) });
+  } catch {
+    throw new ScrapeError("linkedin_timeout", "Scraping API did not respond in time");
+  }
+  if (res.status === 401 || res.status === 403 || res.status === 402 || res.status === 429)
+    throw new ScrapeError("linkedin_rate_limited", `Scraping API refused the request (HTTP ${res.status}): key invalid or credits exhausted. Add a LinkedIn session to fall back.`);
+  if (res.status === 404) throw new ScrapeError("profile_not_found", "Profile not found");
+  if (res.status >= 400) throw new ScrapeError("linkedin_upstream_error", `Scraping API returned HTTP ${res.status}`);
+  const html = await res.text();
+  const meta = (p: string) => { const m = html.match(new RegExp(`<meta[^>]+(?:property|name)="${p}"[^>]+content="([^"]*)"`, "i")); return m ? unesc(m[1]!) : null; };
+  let person: any = null;
+  for (const m of html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const j = JSON.parse(m[1]!);
+      const list = Array.isArray(j?.["@graph"]) ? j["@graph"] : [j];
+      person = list.find((x: any) => x?.["@type"] === "Person") ?? person;
+    } catch {}
+  }
+  const ogTitle = meta("og:title");
+  if (!person && !ogTitle) throw new ScrapeError("linkedin_challenge", "LinkedIn returned a login wall to the scraping API; try again or add a session");
+  const full = String(person?.name ?? ogTitle?.split(/ [-|–] /)[0] ?? slug).trim();
+  const [first, ...rest] = full.split(" ");
+  const arr = (v: any) => (Array.isArray(v) ? v : v ? [v] : []);
+  const img = person?.image?.contentUrl ?? meta("og:image");
+  const payload: ProfilePayload = {
+    data: {
+      public_identifier: slug,
+      profile_url: target,
+      name: { first: first ?? null, last: rest.join(" ") || null, full },
+      headline: arr(person?.jobTitle).join(" · ") || (ogTitle?.split(/ [-|–] /).slice(1, -1).join(" - ") || null),
+      location: person?.address?.addressLocality ?? null,
+      about: person?.description ?? meta("og:description"),
+      profile_image: img ? { url: img, width: null, height: null } : null,
+      background_image: null,
+      experience: arr(person?.worksFor).map((w: any) => ({
+        title: null, company: { name: w?.name ?? null, linkedin_url: w?.url ?? null }, employment_type: null, location: null,
+        start_date: ym(w?.member?.startDate), end_date: ym(w?.member?.endDate), is_current: !w?.member?.endDate, description: w?.member?.description ?? null,
+      })),
+      education: arr(person?.alumniOf).filter((a: any) => a?.["@type"] !== "Organization" || true).map((a: any) => ({
+        school: a?.name ?? null, degree: null, field_of_study: null, start_date: ym(a?.member?.startDate), end_date: ym(a?.member?.endDate), description: a?.member?.description ?? null, grade: null,
+      })),
+      skills: [], certifications: [],
+      languages: arr(person?.knowsLanguage).map((l: any) => ({ name: String(l?.name ?? l), proficiency: null })),
+    },
+    meta: {
+      source: `${opts.relay.id} (public page)`, completeness: person ? 0.5 : 0.2,
+      successful_sections: ["profile"], failed_sections: ["skills", "certifications"],
+      warnings: ["public_page_only:limited_fields"], cached: false, fetched_at: new Date().toISOString(),
+    },
+  };
+  return payload;
+}

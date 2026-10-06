@@ -98,9 +98,9 @@ export function extractSlug(input: string): string {
   }
   if (path.includes("\\") || path.includes("..")) throw bad("Invalid path");
   const parts = path.replace(/^\/+|\/+$/g, "").split("/");
-  if (parts.length !== 2 || parts[0] !== "in" || !validSlug(parts[1]))
+  if (parts.length !== 2 || parts[0] !== "in" || !validSlug(parts[1] ?? ""))
     throw bad("URL must look like linkedin.com/in/username");
-  return parts[1];
+  return parts[1]!;
 }
 
 /* ---------------- entity resolution ---------------- */
@@ -323,7 +323,7 @@ async function requestJson(url: string, params: Record<string, string>, jar: Rec
   const headers = {
     ...BASE_HEADERS,
     cookie: Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; "),
-    "csrf-token": jar.JSESSIONID.replace(/^"|"$/g, ""),
+    "csrf-token": jar["JSESSIONID"]!.replace(/^"|"$/g, ""),
   };
   let res: Response;
   try {
@@ -407,7 +407,7 @@ async function sha16(s: string) {
 export async function scrape(opts: { url: string; cookie: string; timeoutMs: number; useCache: boolean }) {
   const slug = extractSlug(opts.url);
   const jar = parseCookieHeader(opts.cookie);
-  const key = `${await sha16(slug.toLowerCase())}:${await sha16(jar.li_at)}`;
+  const key = `${await sha16(slug.toLowerCase())}:${await sha16(jar["li_at"]!)}`;
   if (opts.useCache) {
     const hit = cache.get(key);
     if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
@@ -436,7 +436,7 @@ export async function testSession(cookie: string, timeoutMs: number) {
       headers: {
         ...BASE_HEADERS,
         cookie: Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; "),
-        "csrf-token": jar.JSESSIONID.replace(/^"|"$/g, ""),
+        "csrf-token": jar["JSESSIONID"]!.replace(/^"|"$/g, ""),
       },
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),

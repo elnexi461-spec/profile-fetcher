@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { testConnection } from "@/lib/linkedin.functions";
 import { settings, useSettings } from "@/lib/settings";
+import { detectProvider, normalizeProxy } from "@/lib/linkedin/providers";
 
 export const Route = createFileRoute("/settings")({
   head: () => ({
@@ -114,6 +115,8 @@ function SettingsPage() {
         )}
       </Section>
 
+      <RelaySection />
+
       <Section title="Scraping" desc="Applies to every scrape from this browser.">
         <div className="space-y-2">
           <label htmlFor="timeout" className="label">Request timeout</label>
@@ -158,5 +161,38 @@ function SettingsPage() {
         </div>
       </Section>
     </div>
+  );
+}
+
+function RelaySection() {
+  const { apiKey, proxy, ready } = useSettings();
+  const [key, setKey] = useState("");
+  const [px, setPx] = useState("");
+  useEffect(() => { if (ready) { setKey(apiKey); setPx(proxy); } }, [ready, apiKey, proxy]);
+  const det = detectProvider(key);
+  const proxyOk = !px.trim() || !!normalizeProxy(px);
+  return (
+    <Section title="Scraping API & proxy" desc="Optional. Requests go through your scraping API first; if it fails or its free quota runs out, the app switches to your LinkedIn session automatically.">
+      <div className="space-y-2">
+        <label htmlFor="apikey" className="label">Scraping API key</label>
+        <input id="apikey" type="password" autoComplete="off" spellCheck={false} className="field font-mono"
+          placeholder="Paste a ScrapingBee, ScraperAPI, ZenRows or RapidAPI key" value={key} onChange={(e) => setKey(e.target.value)} />
+        <p className="hint">
+          {!key.trim() ? "Provider is detected automatically. Prefix with e.g. scraperapi: if detection fails."
+            : det ? <><span className="font-medium text-foreground">Detected: {det.name}</span>{det.note ? ` — ${det.note}` : ""}</>
+            : "Provider not recognized — session scraping will be used. Try prefixing with scrapingbee:, scraperapi: or zenrows:."}
+        </p>
+      </div>
+      <div className="space-y-2">
+        <label htmlFor="proxy" className="label">Proxy</label>
+        <input id="proxy" type="password" autoComplete="off" spellCheck={false} className="field font-mono"
+          placeholder="http://user:pass@host:port  or  host:port:user:pass" value={px} onChange={(e) => setPx(e.target.value)} />
+        <p className="hint">{proxyOk ? "Used with ScrapingBee (own proxy). Direct session requests can't use a proxy on this hosting." : "Format not recognized."}</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button disabled={!proxyOk} onClick={() => { settings.setApiKey(key); settings.setProxy(px); toast.success("Saved for this tab"); }}>Save</Button>
+        {(apiKey || proxy) && <Button variant="ghost" onClick={() => { settings.setApiKey(""); settings.setProxy(""); toast("Cleared"); }}>Clear</Button>}
+      </div>
+    </Section>
   );
 }

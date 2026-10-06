@@ -3,9 +3,10 @@
  * Stateless: the cookie header arrives per request, lives only in memory for that
  * call, and is never logged, cached by value, or included in error messages.
  */
-import type { ProfilePayload, ScrapeErrorCode } from "./types";
+import type { ProfileData, ProfilePayload, ScrapeErrorCode } from "./types";
 
-type Obj = Record<string, any>;
+// Voyager JSON is untyped; the public shape is enforced by ProfilePayload.
+type Obj = any;
 
 /* ---------------- endpoints ---------------- */
 const VOYAGER = "https://www.linkedin.com/voyager/api";
@@ -278,7 +279,7 @@ export function normalize(doc: Obj): { payload: ProfilePayload; profileUrn: stri
   const ents = resolveIncluded(doc);
   const profiles = byType(ents, T.PROFILE);
   if (!profiles.length) return null;
-  const profile = profiles[0];
+  const profile = profiles[0]!;
   const orgs = orgLookup(ents);
   const built = {
     experience: experience(ents),
@@ -292,7 +293,7 @@ export function normalize(doc: Obj): { payload: ProfilePayload; profileUrn: stri
   return {
     profileUrn: profile.entityUrn ?? null,
     payload: {
-      data: { ...core(profile), ...built },
+      data: { ...core(profile), ...built } as ProfileData,
       meta: {
         source: "linkedin_voyager_dash",
         completeness: fallback ? 1 / (names.length + 1) : 1,
